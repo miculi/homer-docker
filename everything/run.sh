@@ -87,22 +87,32 @@ sed '/\[mysqld\]/a max_connections = 1024\' -i $PATH_MYSQL_CONFIG
 
 
 # MYSQL SETUP
-SQL_LOCATION=/homer-api/sql
+SQL_LOCATION=/homer-api/sql/mysql
 DATADIR=/var/lib/mysql
 
 # Handy-dandy MySQL run function
 function MYSQL_RUN () {
 
-  chown -R mysql:mysql "$DATADIR"    
+  chown -R mysql:mysql "$DATADIR"
 
   echo 'Starting mysqld'
-  mysqld &
+  mysqld --user=mysql &
   #echo 'Waiting for mysqld to come online'
   while [ ! -x /var/run/mysqld/mysqld.sock ]; do
       sleep 1
   done
 
 }
+
+# MySQL update user/pass data in .sql prior to creating db
+echo "Updating SQL scripts..."
+perl -p -i -e "s/homer_user/$DB_USER/" $SQL_LOCATION/homer_user.sql
+perl -p -i -e "s/homer_password/$DB_PASS/" $SQL_LOCATION/homer_user.sql
+
+# this change is probably not necessary
+perl -p -i -e "s/homer_user/$DB_USER/" $SQL_LOCATION/schema_configuration.sql
+perl -p -i -e "s/mysql_password/$DB_PASS/" $SQL_LOCATION/schema_configuration.sql
+
 
 # MySQL data loading function
 function MYSQL_INITIAL_DATA_LOAD () {
@@ -116,18 +126,18 @@ function MYSQL_INITIAL_DATA_LOAD () {
   echo "Creating Databases..."
   mysql --host "$DB_HOST" -u "$sqluser" < $SQL_LOCATION/homer_databases.sql
   mysql --host "$DB_HOST" -u "$sqluser" < $SQL_LOCATION/homer_user.sql
-  
+
   mysql --host "$DB_HOST" -u "$sqluser" -e "GRANT ALL ON *.* TO '$DB_USER'@'%' IDENTIFIED BY '$DB_PASS'; FLUSH PRIVILEGES;";
   echo "Creating Tables..."
   mysql --host "$DB_HOST" -u "$sqluser" homer_data < $SQL_LOCATION/schema_data.sql
   mysql --host "$DB_HOST" -u "$sqluser" homer_configuration < $SQL_LOCATION/schema_configuration.sql
   mysql --host "$DB_HOST" -u "$sqluser" homer_statistic < $SQL_LOCATION/schema_statistic.sql
-  
+
   # echo "Creating local DB Node..."
-  mysql --host "$DB_HOST" -u "$sqluser" homer_configuration -e "INSERT INTO node VALUES(1,'mysql','homer_data','3306','"$DB_USER"','"$DB_PASS"','sip_capture','node1', 1);"
-  
+  #mysql --host "$DB_HOST" -u "$sqluser" homer_configuration -e "INSERT INTO node VALUES(1,'mysql','homer_data','3306','"$DB_USER"','"$DB_PASS"','sip_capture','node1', 1);"
+
   echo 'Setting root password....'
-  mysql -u root -e "SET PASSWORD = PASSWORD('$sqlpassword');" 
+  mysql -u root -e "SET PASSWORD = PASSWORD('$sqlpassword');"
 
   echo "Homer initial data load complete" > $DATADIR/.homer_initialized
 
@@ -152,13 +162,20 @@ if [ "$DB_HOST" == "$DOCK_IP" ]; then
 
     # Reconfigure rotation
     export PATH_ROTATION_SCRIPT=/opt/homer_rotate
+    export PATH_ROTATION_CONFIG=/opt/rotation.ini
+
+    perl -p -i -e "s/homer_user/$DB_USER/" $PATH_ROTATION_CONFIG
+    perl -p -i -e "s/homer_password/$DB_PASS/" $PATH_ROTATION_CONFIG
+    perl -p -i -e "s/localhost/$DB_HOST/" $PATH_ROTATION_CONFIG
+
+    export PATH_ROTATION_SCRIPT=/opt/homer_mysql_rotate.pl
     chmod 775 $PATH_ROTATION_SCRIPT
     chmod +x $PATH_ROTATION_SCRIPT
     perl -p -i -e "s/homer_user/$DB_USER/" $PATH_ROTATION_SCRIPT
     perl -p -i -e "s/homer_password/$DB_PASS/" $PATH_ROTATION_SCRIPT
     # Init rotation
-    /opt/homer_rotate > /dev/null 2>&1
-    
+    $PATH_ROTATION_SCRIPT > /dev/null 2>&1
+
     # Start the cron service in the background for rotation
     cron -f &
 
@@ -187,7 +204,7 @@ kamailio=$(which kamailio)
 $kamailio -f $PATH_KAMAILIO_CFG -c
 
 #enable apache mod_php and mod_rewrite
-a2enmod php5
+#a2enmod php5
 a2enmod rewrite 
 
 # Start Apache
